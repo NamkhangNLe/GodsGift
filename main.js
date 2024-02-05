@@ -11,9 +11,20 @@ let form = document.querySelector('form');
 let promptInput = document.querySelector('input[name="prompt"]');
 let output = document.querySelector('.output');
 
-async function parseResume(resumeBuffer) {
-  const data = await pdfParse(resumeBuffer);
-  return data.text;
+async function parseResume(resumeFile) {
+  const formData = new FormData();
+  formData.append('resume', resumeFile);
+
+  const response = await fetch('http://localhost:3000/parse-pdf', {
+    method: 'POST',
+    body: formData
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+
+  return await response.text();
 }
 
 function extractInfoFromResume(resumeText) {
