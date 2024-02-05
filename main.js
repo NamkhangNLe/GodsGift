@@ -2,40 +2,37 @@ import { GoogleGenerativeAI, HarmBlockThreshold, HarmCategory } from "@google/ge
 import Base64 from 'base64-js';
 import MarkdownIt from 'markdown-it';
 import { maybeShowApiKeyBanner } from './gemini-api-banner';
+import pdfParse from 'pdf-parse';
 import './style.css';
 
-// 🔥 FILL THIS OUT FIRST! 🔥
-// 🔥 GET YOUR GEMINI API KEY AT 🔥
-// 🔥 https://makersuite.google.com/app/apikey 🔥
 let API_KEY = 'AIzaSyC-_7mZuoHuxGrWS4P750XVMHiuxUuPocU';
 
 let form = document.querySelector('form');
 let promptInput = document.querySelector('input[name="prompt"]');
 let output = document.querySelector('.output');
 
+async function parseResume(resumeBuffer) {
+  const data = await pdfParse(resumeBuffer);
+  return data.text;
+}
+
+function extractInfoFromResume(resumeText) {
+  // This is a very basic example. You'd likely want to use a more sophisticated approach in a real application.
+  const skills = resumeText.match(/(JavaScript|Python|Java|C#|Ruby|PHP)/g);
+  return { skills };
+}
+
 form.onsubmit = async (ev) => {
   ev.preventDefault();
   output.textContent = 'Generating...';
 
   try {
-    // Load the image as a base64 string
-    let imageUrl = form.elements.namedItem('chosen-image').value;
-    let imageBase64 = await fetch(imageUrl)
-      .then(r => r.arrayBuffer())
-      .then(a => Base64.fromByteArray(new Uint8Array(a)));
+    // Parse the resume and extract information
+    const resumeBuffer = form.elements.namedItem('resume').files[0];
+    const resumeText = await parseResume(resumeBuffer);
+    const info = extractInfoFromResume(resumeText);
 
-    // Assemble the prompt by combining the text with the chosen image
-    let contents = [
-      {
-        role: 'user',
-        parts: [
-          { inline_data: { mime_type: 'image/jpeg', data: imageBase64, } },
-          { text: promptInput.value }
-        ]
-      }
-    ];
-
-    // Call the gemini-pro-vision model, and get a stream of results
+    // Generate questions based on the extracted skills
     const genAI = new GoogleGenerativeAI(API_KEY);
     const model = genAI.getGenerativeModel({
       model: "gemini-pro-vision",
@@ -47,6 +44,7 @@ form.onsubmit = async (ev) => {
       ],
     });
 
+    const contents = info.skills.map(skill => ({prompt: `Tell me about your experience with ${skill}.`}));
     const result = await model.generateContentStream({ contents });
 
     // Read from the stream and interpret the output as markdown
@@ -61,5 +59,50 @@ form.onsubmit = async (ev) => {
   }
 };
 
-// You can delete this once you've filled out an API key
-maybeShowApiKeyBanner(API_KEY);
+// form.onsubmit = async (ev) => {
+//   ev.preventDefault();
+//   output.textContent = 'Generating...';
+
+//   try {
+//     // Load the image as a base64 string
+//     let imageUrl = form.elements.namedItem('chosen-image').value;
+//     let imageBase64 = await fetch(imageUrl)
+//       .then(r => r.arrayBuffer())
+//       .then(a => Base64.fromByteArray(new Uint8Array(a)));
+
+//     // Assemble the prompt by combining the text with the chosen image
+//     let contents = [
+//       {
+//         role: 'user',
+//         parts: [
+//           { inline_data: { mime_type: 'image/jpeg', data: imageBase64, } },
+//           { text: promptInput.value }
+//         ]
+//       }
+//     ];
+
+//     // Call the gemini-pro-vision model, and get a stream of results
+//     const genAI = new GoogleGenerativeAI(API_KEY);
+//     const model = genAI.getGenerativeModel({
+//       model: "gemini-pro-vision",
+//       safetySettings: [
+//         {
+//           category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+//           threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+//         },
+//       ],
+//     });
+
+//     const result = await model.generateContentStream({ contents });
+
+//     // Read from the stream and interpret the output as markdown
+//     let buffer = [];
+//     let md = new MarkdownIt();
+//     for await (let response of result.stream) {
+//       buffer.push(response.text());
+//       output.innerHTML = md.render(buffer.join(''));
+//     }
+//   } catch (e) {
+//     output.innerHTML += '<hr>' + e;
+//   }
+// };
