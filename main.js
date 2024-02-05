@@ -22,6 +22,17 @@ function extractInfoFromResume(resumeText) {
   return { skills };
 }
 
+function startVideoInterview() {
+  navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+    .then(stream => {
+      const video = document.querySelector('video');
+      video.srcObject = stream;
+    })
+    .catch(err => {
+      console.error('Error accessing media devices.', err);
+    });
+}
+
 form.onsubmit = async (ev) => {
   ev.preventDefault();
   output.textContent = 'Generating...';
@@ -54,6 +65,9 @@ form.onsubmit = async (ev) => {
       buffer.push(response.text());
       output.innerHTML = md.render(buffer.join(''));
     }
+
+    // Start a video interview
+    startVideoInterview();
   } catch (e) {
     output.innerHTML += '<hr>' + e;
   }
