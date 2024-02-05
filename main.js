@@ -39,7 +39,8 @@ form.onsubmit = async (ev) => {
 
   try {
     // Parse the resume and extract information
-    const resumeBuffer = form.elements.namedItem('resume').files[0];
+    const resumeFile = form.elements.namedItem('resume').files[0];
+    const resumeBuffer = await readFile(resumeFile);
     const resumeText = await parseResume(resumeBuffer);
     const info = extractInfoFromResume(resumeText);
 
