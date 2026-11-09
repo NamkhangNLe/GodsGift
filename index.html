@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/style.css" />
+  <!-- style.css is bundled via main.js; no separate link tag (it would 404 under the /GodsGift/ base). -->
 </head>
 <body>
   <main>
@@ -39,7 +39,7 @@
       answer, and finish with a scorecard.</p>
       <ol class="steps">
         <li><span>1</span> Pick a track</li>
-        <li><span>2</span> Answer out loud, in writing</li>
+        <li><span>2</span> Answer in writing, one question at a time</li>
         <li><span>3</span> Get your scorecard</li>
       </ol>
 
@@ -75,6 +75,16 @@
         <p id="resumeStatus" class="muted small"></p>
       </div>
 
+      <label>
+        Job description (optional)
+        <textarea id="jdInput" rows="4" placeholder="Paste the job description here. GodsGift tailors question selection to the skills and responsibilities it mentions."></textarea>
+      </label>
+
+      <div id="historyWrap" class="history" hidden>
+        <h3>Past interviews</h3>
+        <ul id="historyList" class="history-list"></ul>
+      </div>
+
       <details id="settingsPanel" class="settings">
         <summary>Settings: Gemini API key</summary>
         <p class="muted small">
@@ -103,6 +113,7 @@
       <div class="progress-row">
         <span id="progressText">Question 1 of 5</span>
         <div class="progress-bar"><div id="progressFill"></div></div>
+        <span id="qTimer" class="q-timer" title="Time on this question">0:00</span>
         <span id="interviewMode" class="badge badge-demo">Demo mode</span>
       </div>
 
@@ -125,6 +136,7 @@
       <h2>Your scorecard</h2>
       <div id="scorecard" class="scorecard"></div>
       <div class="form-row">
+        <button type="button" id="retryBtn" class="btn btn-primary" hidden>Retry weakest question</button>
         <button type="button" id="downloadBtn" class="btn btn-primary">Download transcript (.md)</button>
         <button type="button" id="restartBtn" class="btn btn-ghost">Start a new interview</button>
       </div>

@@ -1,7 +1,13 @@
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
 import MarkdownIt from "markdown-it";
-import { TRACKS } from "./questions.js";
+import DOMPurify from "dompurify";
+import * as pdfjsLib from "pdfjs-dist";
+import pdfWorker from "pdfjs-dist/build/pdf.worker.min.js?url";
+import { TRACKS, DIFFICULTY_ORDER } from "./questions.js";
+import { scoreAnswer, summarizeCriteria, improvementsFor } from "./rubric.js";
 import "./style.css";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 const md = new MarkdownIt();
 const MODEL_NAME = "gemini-2.0-flash";
@@ -9,7 +15,9 @@ const MODEL_NAME = "gemini-2.0-flash";
 // ---------- config: API key ----------
 // Priority: key saved in the browser (Settings) first, then VITE_GEMINI_API_KEY
 // from a .env file. No key is ever hardcoded. Without a key the app runs in
-// demo mode with a built-in question bank and heuristic feedback.
+// demo mode with a built-in question bank and rubric feedback.
+// NOTE (by design, not fixed here): live mode still uses a client-side key.
+// A serverless AI proxy is the bigger rebuild that would remove that.
 function getApiKey() {
   const stored = (localStorage.getItem("godsgift.apiKey") || "").trim();
   const envKey = (import.meta.env.VITE_GEMINI_API_KEY || "").trim();
@@ -30,8 +38,11 @@ const els = {
   trackList: $("trackList"),
   countSelect: $("countSelect"),
   difficultySelect: $("difficultySelect"),
+  jdInput: $("jdInput"),
   resumeInput: $("resumeInput"),
   resumeStatus: $("resumeStatus"),
+  historyWrap: $("historyWrap"),
+  historyList: $("historyList"),
   settingsPanel: $("settingsPanel"),
   apiKeyInput: $("apiKeyInput"),
   saveKeyBtn: $("saveKeyBtn"),
@@ -40,6 +51,7 @@ const els = {
   startBtn: $("startBtn"),
   progressText: $("progressText"),
   progressFill: $("progressFill"),
+  qTimer: $("qTimer"),
   interviewMode: $("interviewMode"),
   transcript: $("transcript"),
   typing: $("typing"),
@@ -50,6 +62,7 @@ const els = {
   scorecard: $("scorecard"),
   downloadBtn: $("downloadBtn"),
   restartBtn: $("restartBtn"),
+  retryBtn: $("retryBtn"),
 };
 
 // ---------- state ----------
@@ -57,21 +70,25 @@ const state = {
   trackId: "swe",
   count: 5,
   difficulty: "mid",
+  jdText: "",
   resumeText: "",
   resumeSkills: [],
   mode: "demo",
-  questions: [],
+  questions: [], // question objects { text, difficulty, type, criteria }
   current: 0,
   transcript: [],
-  scores: [],
+  scores: [], // { question, questionObj, score, note, criteria, seconds }
   chat: null,
   awaitingAnswer: false,
   finished: false,
+  questionStart: 0,
+  scorecard: null,
+  weakest: null,
 };
 
 // ---------- helpers ----------
 function esc(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 function show(view) {
   els.setup.hidden = view !== "setup";
@@ -110,6 +127,47 @@ function renderTracks() {
   }
 }
 
+// ---------- interview history (localStorage) ----------
+const HISTORY_KEY = "godsgift.history";
+function loadHistory() {
+  try {
+    const h = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+    return Array.isArray(h) ? h : [];
+  } catch {
+    return [];
+  }
+}
+function saveHistoryEntry(entry) {
+  const h = loadHistory();
+  h.unshift(entry);
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(h.slice(0, 20)));
+  } catch {
+    // storage full or unavailable: history is a nice-to-have, never fatal
+  }
+}
+function renderHistory() {
+  const h = loadHistory();
+  els.historyList.innerHTML = "";
+  els.historyWrap.hidden = h.length === 0;
+  for (const entry of h) {
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const date = new Date(entry.date).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    const overall = typeof entry.overall === "number" ? entry.overall.toFixed(1) + " / 10" : "n/a";
+    const label = document.createElement("span");
+    label.textContent = `${date} · ${entry.trackLabel} · ${entry.difficulty} · ${overall} · ${entry.count} questions`;
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "btn btn-small btn-ghost";
+    retry.textContent = "Retry weakest";
+    retry.addEventListener("click", () => retryQuestion(entry.weakestText, entry.trackId));
+    li.appendChild(label);
+    li.appendChild(retry);
+    els.historyList.appendChild(li);
+  }
+}
+
 els.settingsBtn.addEventListener("click", () => {
   els.settingsPanel.open = true;
   els.settingsPanel.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -117,7 +175,7 @@ els.settingsBtn.addEventListener("click", () => {
 });
 els.keyBannerBtn.addEventListener("click", () => {
   els.settingsPanel.open = true;
-  els.apiKeyInput.focus();
+  els.settingsPanel.focus();
 });
 els.saveKeyBtn.addEventListener("click", () => {
   const key = els.apiKeyInput.value.trim();
@@ -136,24 +194,31 @@ els.clearKeyBtn.addEventListener("click", () => {
   els.keyStatus.textContent = "Key removed. Demo mode.";
 });
 
-// ---------- resume (optional) ----------
+// ---------- resume (optional, client-side PDF parsing) ----------
+// Parses the PDF entirely in the browser with pdfjs-dist, so resume upload
+// works on GitHub Pages with no server. The old /parse-pdf Express endpoint
+// is no longer used by the client (server/ remains for local dev only).
 const SKILL_RE =
   /(JavaScript|TypeScript|Python|Java|Go|Rust|C\+\+|C#|Ruby|PHP|SQL|React|Node\.js|Node|Vue|Angular|Django|Flask|Spring|Kubernetes|Docker|AWS|GCP|Azure|Terraform|GraphQL|REST|Kafka|Redis|PostgreSQL|Postgres|MySQL|MongoDB|Machine Learning|ML|LLM|System Design|Data Structures|Algorithms)/gi;
 
-async function parseResume(file) {
-  const formData = new FormData();
-  formData.append("resume", file);
-  const res = await fetch("/parse-pdf", { method: "POST", body: formData });
-  if (!res.ok) throw new Error("parse-pdf returned " + res.status);
-  return await res.text();
+async function parseResumePdf(file) {
+  const buf = await file.arrayBuffer();
+  const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
+  let text = "";
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i);
+    const content = await page.getTextContent();
+    text += content.items.map((item) => item.str).join(" ") + "\n";
+  }
+  return text;
 }
 
 els.resumeInput.addEventListener("change", async () => {
   const file = els.resumeInput.files[0];
   if (!file) return;
-  els.resumeStatus.textContent = "Parsing resume...";
+  els.resumeStatus.textContent = "Parsing resume in your browser...";
   try {
-    const text = await parseResume(file);
+    const text = await parseResumePdf(file);
     state.resumeText = text;
     const found = [...new Set((text.match(SKILL_RE) || []).map((s) => s.trim()))];
     state.resumeSkills = found.slice(0, 12);
@@ -165,21 +230,23 @@ els.resumeInput.addEventListener("change", async () => {
     state.resumeText = "";
     state.resumeSkills = [];
     els.resumeStatus.textContent =
-      "Resume server is not running (start it with npm run server), so the interview will continue without resume tailoring.";
+      "Could not parse that PDF (" + (e.message || "unknown error") + "). The interview will continue without resume tailoring.";
   }
 });
 
 // ---------- transcript ----------
-function addMessage(kind, html, score) {
+// All HTML inserted here is sanitized with DOMPurify first: live model output
+// is untrusted and must never reach innerHTML raw.
+function addMessage(kind, html, score, tag) {
   const who = kind === "q" ? "Interviewer" : kind === "a" ? "You" : "Feedback";
   const div = document.createElement("div");
   div.className = "msg msg-" + kind;
   div.innerHTML =
-    `<span class="who">${who}</span>` +
-    `<div>${html}</div>` +
+    `<span class="who">${who}${tag ? ` <span class="q-tag">${esc(tag)}</span>` : ""}</span>` +
+    `<div>${DOMPurify.sanitize(html)}</div>` +
     (typeof score === "number" ? `<span class="score-chip">Score: ${score}/10</span>` : "");
   els.transcript.appendChild(div);
-  div.scrollIntoView({ behavior: "smooth", block: "end" });
+  if (typeof div.scrollIntoView === "function") div.scrollIntoView({ behavior: "smooth", block: "end" });
   state.transcript.push({ kind, html, score });
 }
 
@@ -189,15 +256,48 @@ function setProgress() {
   els.progressFill.style.width = `${Math.round((done / state.count) * 100)}%`;
 }
 
+// ---------- per-question timer ----------
+let timerId = null;
+function updateTimer() {
+  const s = Math.max(0, Math.floor((Date.now() - state.questionStart) / 1000));
+  els.qTimer.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+function startTimer() {
+  stopTimer();
+  state.questionStart = Date.now();
+  updateTimer();
+  timerId = setInterval(updateTimer, 1000);
+}
+function stopTimer() {
+  if (timerId) clearInterval(timerId);
+  timerId = null;
+}
+function questionSeconds() {
+  return Math.max(0, Math.floor((Date.now() - state.questionStart) / 1000));
+}
+
 // ---------- interview start ----------
+// Difficulty is real now: questions are ranked by difficulty distance first,
+// then by keyword overlap with the job description and resume skills, with a
+// small random jitter so repeat interviews feel fresh.
+function tokenize(s) {
+  return new Set((s.toLowerCase().match(/[a-z][a-z+#.]{1,}/g) || []));
+}
 function pickQuestions() {
   const bank = [...TRACKS[state.trackId].questions];
-  // Shuffle lightly so repeat interviews feel fresh, but keep it deterministic enough.
-  for (let i = bank.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [bank[i], bank[j]] = [bank[j], bank[i]];
-  }
-  return bank.slice(0, state.count);
+  const want = DIFFICULTY_ORDER.indexOf(state.difficulty);
+  const jdTokens = tokenize(state.jdText);
+  const resumeLower = state.resumeSkills.map((s) => s.toLowerCase());
+  const scored = bank.map((q) => {
+    const dist = Math.abs(DIFFICULTY_ORDER.indexOf(q.difficulty) - want);
+    const qTokens = tokenize(q.text + " " + (q.criteria || []).map((c) => c.label).join(" "));
+    let overlap = 0;
+    for (const t of jdTokens) if (qTokens.has(t)) overlap += 1;
+    for (const s of resumeLower) if (q.text.toLowerCase().includes(s)) overlap += 2;
+    return { q, key: -dist * 10 + overlap + Math.random() * 0.9 };
+  });
+  scored.sort((a, b) => b.key - a.key);
+  return scored.slice(0, state.count).map((s) => s.q);
 }
 
 function systemInstruction() {
@@ -205,12 +305,16 @@ function systemInstruction() {
   const resume = state.resumeSkills.length
     ? `\nThe candidate's resume mentions these skills: ${state.resumeSkills.join(", ")}. Work at least one question toward them when natural.`
     : "";
+  const jd = state.jdText.trim()
+    ? `\nThe job description for this role: ${state.jdText.trim().slice(0, 2000)} Tailor your questions to the skills and responsibilities in it.`
+    : "";
   return (
     `You are an expert, friendly interviewer running a ${state.difficulty}-level ` +
     `${track.label} interview. Ask one question at a time. Keep questions focused and realistic. ` +
     `After each answer, give brief, honest feedback (2-3 sentences), a score from 1 to 10, ` +
     `then ask the next question. Do not lecture. Do not ask more than one question per turn.` +
-    resume
+    resume +
+    jd
   );
 }
 
@@ -226,24 +330,29 @@ function newGeminiChat() {
   return model.startChat({ history: [] });
 }
 
-function askQuestion(text) {
-  state.questions[state.current] = text;
-  addMessage("q", `<p>${esc(text)}</p>`);
+function askQuestion(q) {
+  state.questions[state.current] = q;
+  addMessage("q", `<p>${esc(q.text)}</p>`, undefined, q.type);
   setProgress();
+  startTimer();
   state.awaitingAnswer = true;
   els.answerInput.focus();
 }
 
-async function startInterview() {
-  state.count = parseInt(els.countSelect.value, 10);
+async function startInterview(override) {
+  state.count = override ? override.questions.length : parseInt(els.countSelect.value, 10);
   state.difficulty = els.difficultySelect.value;
+  state.jdText = els.jdInput ? els.jdInput.value : "";
   state.mode = hasKey() ? "live" : "demo";
-  state.questions = pickQuestions();
+  state.questions = override ? override.questions : pickQuestions();
   state.current = 0;
   state.transcript = [];
   state.scores = [];
   state.finished = false;
   state.chat = null;
+  state.scorecard = null;
+  state.weakest = null;
+  els.retryBtn.hidden = true;
 
   els.transcript.innerHTML = "";
   els.answerInput.value = "";
@@ -258,10 +367,10 @@ async function startInterview() {
       // Seed the first question from the bank so the interview starts instantly,
       // then let Gemini drive feedback and follow-ups.
       const res = await state.chat.sendMessage(
-        `Start the interview. The first question is: "${first}" Ask it now, exactly as written, with a one-line friendly opener.`
+        `Start the interview. The first question is: "${first.text}" Ask it now, exactly as written, with a one-line friendly opener.`
       );
       const text = res.response.text().trim();
-      askQuestion(extractQuestion(text) || first);
+      askQuestion({ text: extractQuestion(text) || first.text, difficulty: state.difficulty, type: "Live", criteria: [] });
     } catch (e) {
       addMessage(
         "f",
@@ -276,7 +385,30 @@ async function startInterview() {
   }
 }
 
-els.startBtn.addEventListener("click", startInterview);
+els.startBtn.addEventListener("click", () => startInterview());
+
+// Retry the weakest question from the last scorecard (or a history entry):
+// a focused one-question interview on exactly that question.
+function findQuestionByText(trackId, text) {
+  const bank = TRACKS[trackId] ? TRACKS[trackId].questions : [];
+  return bank.find((q) => q.text === text) || null;
+}
+function retryQuestion(questionText, trackId) {
+  if (!questionText) return;
+  state.trackId = trackId || state.trackId;
+  renderTracks();
+  const q = findQuestionByText(state.trackId, questionText) || {
+    text: questionText,
+    difficulty: state.difficulty,
+    type: "Retry",
+    criteria: [],
+  };
+  show("setup");
+  startInterview({ questions: [q] });
+}
+els.retryBtn.addEventListener("click", () => {
+  if (state.weakest) retryQuestion(state.weakest.question, state.trackId);
+});
 
 // ---------- answering ----------
 function extractQuestion(text) {
@@ -292,43 +424,37 @@ function parseLiveTurn(text) {
   const nx = text.match(/NEXT:\s*([\s\S]*)/i);
   return {
     feedback: fb ? fb[1].trim() : text.trim(),
-    score: sc ? Math.max(1, Math.min(10, Math.round(parseFloat(sc[1])))) : null,
+    // If the model omits SCORE:, default to a mid score (5) instead of null,
+    // which used to render "n/a" on the scorecard.
+    score: sc ? Math.max(1, Math.min(10, Math.round(parseFloat(sc[1])))) : 5,
     next: nx ? nx[1].trim() : null,
   };
 }
 
-// Demo-mode heuristic feedback: honest, specific to what the answer shows.
-function demoFeedback(answer) {
-  const words = answer.trim().split(/\s+/).filter(Boolean);
-  const n = words.length;
-  const lower = answer.toLowerCase();
-  const hasNumber = /\d/.test(answer);
-  const hasExample = /(for example|for instance|when i|i led|we built|i built|i shipped|i designed|in my|at my|my team)/i.test(answer);
-  const hasStructure = /(first|then|finally|so |because|as a result|the result was|situation|task|action|result)/i.test(answer);
+// Demo feedback is scored by the rubric engine against THIS question's
+// criteria (rubric.js). Live-model follow-up questions have no bank criteria;
+// they fall back to three generic criteria so the rubric still applies.
+const GENERIC_CRITERIA = [
+  { label: "Uses a clear structure", keywords: ["first", "then", "finally", "because", "as a result", "situation", "action", "result"] },
+  { label: "Grounds the answer in a real example", keywords: ["for example", "for instance", "when i", "i led", "we built", "i built", "i shipped", "my team"] },
+  { label: "Quantifies impact", keywords: ["%", "percent", "user", "hour", "faster", "saved", "reduced", "increased", "scale"] },
+];
+function demoFeedback(question, answer) {
+  const q = question.criteria && question.criteria.length ? question : { ...question, criteria: GENERIC_CRITERIA };
+  return scoreAnswer(q, answer);
+}
 
-  let score = 5;
-  if (n >= 120) score += 1;
-  if (n >= 60) score += 1;
-  if (hasNumber) score += 1;
-  if (hasExample) score += 1;
-  if (hasStructure) score += 1;
-  if (n < 25) score -= 1;
-  score = Math.max(3, Math.min(9, score));
-
-  const notes = [];
-  if (n < 25) notes.push("This answer is short. Add detail: what you did, how, and what happened.");
-  else if (n < 60) notes.push("A solid start, but it reads thin. Add one concrete detail or example.");
-  else notes.push("Good length. The answer has room to breathe.");
-  if (hasNumber) notes.push("Strong use of concrete numbers, that makes the answer credible.");
-  else notes.push("Consider adding a number or a measurable outcome (users, time saved, scale).");
-  if (hasExample) notes.push("The specific example helps a lot, keep grounding answers in real work.");
-  else notes.push("Ground the answer in a real example from your experience.");
-  if (!hasStructure) notes.push("Try a clear structure: situation, what you did, and the result.");
-  return { score, text: notes.join(" ") };
+function criteriaHtml(criteria) {
+  if (!criteria || !criteria.length) return "";
+  return `<ul class="criteria-list">${criteria
+    .map((c) => `<li class="${c.passed ? "pass" : "fail"}">${c.passed ? "✓" : "✗"} ${esc(c.label)}</li>`)
+    .join("")}</ul>`;
 }
 
 async function handleAnswer(answer) {
   const q = state.questions[state.current];
+  const seconds = questionSeconds();
+  stopTimer();
   addMessage("a", `<p>${esc(answer)}</p>`);
   els.answerInput.value = "";
   els.submitAnswerBtn.disabled = true;
@@ -342,13 +468,13 @@ async function handleAnswer(answer) {
           `Reply in exactly this format:\nFEEDBACK: <feedback>\nSCORE: <n>/10\nNEXT: <next question, or DONE if this was the last question>`
       );
       const parsed = parseLiveTurn(res.response.text());
-      state.scores.push({ question: q, score: parsed.score, note: parsed.feedback });
+      state.scores.push({ question: q.text, questionObj: q, score: parsed.score, note: parsed.feedback, criteria: [], seconds });
       addMessage("f", md.render(parsed.feedback), parsed.score);
       advance(parsed.next);
     } else {
-      const fb = demoFeedback(answer);
-      state.scores.push({ question: q, score: fb.score, note: fb.text });
-      addMessage("f", `<p>${esc(fb.text)}</p>`, fb.score);
+      const fb = demoFeedback(q, answer);
+      state.scores.push({ question: q.text, questionObj: q, score: fb.score, note: fb.text, criteria: fb.criteria, seconds });
+      addMessage("f", `<p>${esc(fb.text)}</p>${criteriaHtml(fb.criteria)}`, fb.score);
       advance(null);
     }
   } catch (e) {
@@ -358,9 +484,9 @@ async function handleAnswer(answer) {
     );
     state.mode = "demo";
     setBadge("demo");
-    const fb = demoFeedback(answer);
-    state.scores.push({ question: q, score: fb.score, note: fb.text });
-    addMessage("f", `<p>${esc(fb.text)}</p>`, fb.score);
+    const fb = demoFeedback(q, answer);
+    state.scores.push({ question: q.text, questionObj: q, score: fb.score, note: fb.text, criteria: fb.criteria, seconds });
+    addMessage("f", `<p>${esc(fb.text)}</p>${criteriaHtml(fb.criteria)}`, fb.score);
     advance(null);
   } finally {
     els.typing.hidden = true;
@@ -374,8 +500,11 @@ function advance(nextText) {
     finishInterview();
     return;
   }
-  const nextQ = nextText && state.mode === "live" ? extractQuestion(nextText) || nextText : state.questions[state.current];
   // In live mode the model supplies the next question; in demo mode use the bank.
+  const nextQ =
+    nextText && state.mode === "live"
+      ? { text: extractQuestion(nextText) || nextText, difficulty: state.difficulty, type: "Live", criteria: [] }
+      : state.questions[state.current];
   askQuestion(nextQ);
 }
 
@@ -394,33 +523,32 @@ els.answerForm.addEventListener("submit", (ev) => {
 
 els.endBtn.addEventListener("click", () => {
   if (state.finished) return;
+  stopTimer();
   finishInterview();
 });
 
 // ---------- scorecard ----------
+// Derived from the per-question criteria results, not hardcoded bullets:
+// strengths/gaps/improvements come from which criteria the candidate
+// consistently passed or failed across this interview.
 function demoScorecard() {
   const scored = state.scores.filter((s) => typeof s.score === "number");
   const overall = scored.length
     ? Math.round((scored.reduce((a, s) => a + s.score, 0) / scored.length) * 10) / 10
     : null;
-  const allText = state.transcript.filter((t) => t.kind === "a").map((t) => t.html).join(" ");
-  const strengths = [];
-  const gaps = [];
-  const improvements = [];
-  if (/\d/.test(allText)) strengths.push("Uses concrete numbers and measurable detail.");
-  else gaps.push("Answers rarely include numbers or measurable outcomes.");
-  if (/(for example|for instance|when i|i led|we built)/i.test(allText)) strengths.push("Grounds answers in real experience.");
-  else gaps.push("Answers stay general, add a real example from your work.");
-  const avgLen = state.transcript.filter((t) => t.kind === "a").length
-    ? state.transcript.filter((t) => t.kind === "a").reduce((a, t) => a + t.html.split(/\s+/).length, 0) /
-      state.transcript.filter((t) => t.kind === "a").length
-    : 0;
-  if (avgLen >= 60) strengths.push("Answers are well developed, not one-liners.");
-  else gaps.push("Answers run short. Aim for a few sentences with a clear result.");
-  improvements.push("For each answer, use situation, action, result: what happened, what you did, what changed.");
-  improvements.push("End answers with an outcome or a lesson, not just a description.");
-  improvements.push("Practice the weakest question again and record a 60-second spoken version.");
-  return { overall, perQuestion: state.scores, strengths, gaps, improvements, mode: "demo" };
+  const summary = summarizeCriteria(scored);
+  const improvements = improvementsFor(summary.gaps.map((g) => g.split(" (")[0]), summary.rows);
+  const weakest = scored.length ? [...scored].sort((a, b) => a.score - b.score)[0] : null;
+  return {
+    overall,
+    perQuestion: state.scores,
+    criteriaRows: summary.rows,
+    strengths: summary.strengths,
+    gaps: summary.gaps,
+    improvements,
+    weakest: weakest ? { question: weakest.question, score: weakest.score } : null,
+    mode: "demo",
+  };
 }
 
 async function liveScorecard() {
@@ -434,7 +562,9 @@ async function liveScorecard() {
   const m = text.match(/```json\s*([\s\S]*?)\s*```/) || text.match(/\{[\s\S]*\}/);
   if (!m) throw new Error("Could not parse scorecard JSON.");
   const data = JSON.parse(m[1] || m[0]);
-  return { ...data, mode: "live" };
+  const scored = (data.perQuestion || []).map((s) => ({ ...s, score: typeof s.score === "number" ? s.score : 5 }));
+  const weakest = scored.length ? [...scored].sort((a, b) => a.score - b.score)[0] : null;
+  return { ...data, perQuestion: scored, criteriaRows: [], weakest: weakest ? { question: weakest.question, score: weakest.score } : null, mode: "live" };
 }
 
 function renderScorecard(data) {
@@ -443,14 +573,27 @@ function renderScorecard(data) {
   const rows = (data.perQuestion || state.scores)
     .map((s) => {
       const pct = typeof s.score === "number" ? Math.max(0, Math.min(100, Math.round((s.score / 10) * 100))) : 0;
-      return `<tr><td>${esc(s.question || "")}</td><td>${esc(s.note || "")}</td><td class="num">${typeof s.score === "number" ? s.score + " / 10" : "-"}<span class="score-bar"><span style="width:${pct}%"></span></span></td></tr>`;
+      const crit = s.criteria && s.criteria.length ? criteriaHtml(s.criteria) : "";
+      const time = typeof s.seconds === "number" ? `<span class="muted small"> · ${Math.floor(s.seconds / 60)}:${String(s.seconds % 60).padStart(2, "0")}</span>` : "";
+      return `<tr><td>${esc(s.question || "")}${time}</td><td>${esc(s.note || "")}${crit}</td><td class="num">${typeof s.score === "number" ? s.score + " / 10" : "-"}<span class="score-bar"><span style="width:${pct}%"></span></span></td></tr>`;
     })
     .join("");
   const list = (items) => (items && items.length ? `<ul>${items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : "<p class=\"muted\">Nothing noted.</p>");
+  const rubricViz =
+    data.criteriaRows && data.criteriaRows.length
+      ? `<h3>Rubric breakdown</h3><p class="muted small">How often each rubric criterion was met across this interview.</p>` +
+        data.criteriaRows
+          .map((r) => {
+            const pct = r.total ? Math.round((r.passed / r.total) * 100) : 0;
+            return `<div class="rubric-row"><span class="rubric-label">${esc(r.label)}</span><span class="rubric-bar"><span style="width:${pct}%"></span></span><span class="rubric-num">${r.passed}/${r.total}</span></div>`;
+          })
+          .join("")
+      : "";
   els.scorecard.innerHTML =
-    `<div class="overall"><span class="big">${overall === null ? "n/a" : overall.toFixed(1)}<small> / 10</small></span><span class="overall-bar"><span style="width:${overallPct}%"></span></span><span class="muted small">${data.mode === "live" ? "Live AI scorecard" : "Demo scorecard (heuristic)"}</span></div>` +
+    `<div class="overall"><span class="big">${overall === null ? "n/a" : overall.toFixed(1)}<small> / 10</small></span><span class="overall-bar"><span style="width:${overallPct}%"></span></span><span class="muted small">${data.mode === "live" ? "Live AI scorecard" : "Demo scorecard (rubric)"}</span></div>` +
     `<h3>Per question</h3>` +
-    `<table class="score-table"><thead><tr><th>Question</th><th>Note</th><th style="text-align:right">Score</th></tr></thead><tbody>${rows}</tbody></table>` +
+    `<table class="score-table"><thead><tr><th>Question</th><th>Feedback</th><th style="text-align:right">Score</th></tr></thead><tbody>${rows}</tbody></table>` +
+    rubricViz +
     `<h3>Strengths</h3>${list(data.strengths)}` +
     `<h3>Gaps</h3>${list(data.gaps)}` +
     `<h3>To improve</h3>${list(data.improvements)}`;
@@ -459,6 +602,7 @@ function renderScorecard(data) {
 async function finishInterview() {
   state.finished = true;
   state.awaitingAnswer = false;
+  stopTimer();
   els.typing.hidden = false;
   els.typing.textContent = "Building your scorecard...";
   show("scorecard");
@@ -476,6 +620,22 @@ async function finishInterview() {
     }
     renderScorecard(data);
     state.scorecard = data;
+    state.weakest = data.weakest || null;
+    els.retryBtn.hidden = !state.weakest;
+    if (state.weakest) {
+      els.retryBtn.textContent = `Retry weakest question (${state.weakest.score}/10)`;
+    }
+    saveHistoryEntry({
+      date: new Date().toISOString(),
+      trackId: state.trackId,
+      trackLabel: TRACKS[state.trackId].label,
+      difficulty: state.difficulty,
+      count: state.scores.length,
+      overall: data.overall,
+      mode: data.mode,
+      weakestText: state.weakest ? state.weakest.question : null,
+    });
+    renderHistory();
   } finally {
     els.typing.hidden = true;
     els.typing.textContent = "Interviewer is thinking...";
@@ -488,6 +648,7 @@ els.restartBtn.addEventListener("click", () => {
   els.answerInput.value = "";
   els.answerInput.placeholder = "Type your answer here. Be specific: what you did, how, and what happened.";
   refreshModeUI();
+  renderHistory();
   show("setup");
 });
 
@@ -506,6 +667,7 @@ els.downloadBtn.addEventListener("click", () => {
     (state.scorecard.strengths || []).forEach((s) => lines.push(`- Strength: ${s}`));
     (state.scorecard.gaps || []).forEach((s) => lines.push(`- Gap: ${s}`));
     (state.scorecard.improvements || []).forEach((s) => lines.push(`- Improve: ${s}`));
+    if (state.scorecard.weakest) lines.push(``, `Weakest question: ${state.scorecard.weakest.question} (${state.scorecard.weakest.score}/10)`);
   }
   const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
   const a = document.createElement("a");
@@ -517,5 +679,6 @@ els.downloadBtn.addEventListener("click", () => {
 
 // ---------- init ----------
 renderTracks();
+renderHistory();
 refreshModeUI();
 show("setup");

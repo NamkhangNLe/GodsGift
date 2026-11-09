@@ -19,9 +19,12 @@ since shipped. It is built well anyway.
 
 ## Demo mode vs live AI
 
-- **Demo mode (no key):** questions come from a built-in bank and feedback is
-  a heuristic scorecard (answer length, concrete numbers, examples, structure).
+- **Demo mode (no key):** questions come from a built-in bank (50 questions,
+  each with a difficulty level and 2–3 rubric criteria) and feedback is scored
+  deterministically against that question's criteria, so the same answer scores
+  differently on different questions and an off-topic answer scores low.
   Nothing leaves the page. This is the default and works out of the box.
+  Run `npm test` for the rubric test cases.
 - **Live AI (Gemini key):** the interviewer is Google Gemini
   (`gemini-2.0-flash`). It asks questions, gives honest feedback with a score,
   asks follow-ups, and produces a final scorecard. Add a key in **Settings**
@@ -33,23 +36,21 @@ A key in `.env` is baked into the client bundle at build time, so anyone who
 loads the page can read it. Only use it for local / personal builds. For a
 shared deployment, leave it empty and use Settings.
 
-## Optional: resume tailoring
+## Optional: resume tailoring and job description
 
 Upload a PDF resume on the setup screen and the interviewer tailors questions
-toward the skills it finds. This needs the small resume server (see below).
-If the server is not running, the interview just continues without tailoring.
+toward the skills it finds. The PDF is parsed entirely in your browser with
+pdfjs-dist, so this works on GitHub Pages with no server. Paste a job
+description in the setup screen and question selection is also weighted toward
+the skills and responsibilities it mentions, and the live-mode prompt includes
+it. (The old `server/` Express `/parse-pdf` endpoint is no longer used by the
+client and remains only for local dev.)
 
 ## Run it
 
 ```bash
 npm install
 npm run dev        # app on http://localhost:5173
-```
-
-In a second terminal (optional, only for resume parsing):
-
-```bash
-npm run server     # resume server on http://localhost:3000
 ```
 
 Build for production:
@@ -59,15 +60,25 @@ npm run build
 npm run preview
 ```
 
+Run the rubric tests:
+
+```bash
+npm test
+```
+
 ## How it is built
 
 - **Client:** Vite + vanilla JS modules. `main.js` is the interview flow
   (setup, interview, scorecard), `questions.js` is the question bank used by
-  demo mode and as seed questions in live mode, `style.css` is the UI.
-- **Server:** `server/server.js` is a small Express service that parses an
-  uploaded PDF resume with `pdf-parse`. It does not hold any API key.
+  demo mode and as seed questions in live mode, `rubric.js` is the
+  deterministic per-question rubric engine, `style.css` is the UI.
+- **Server:** `server/server.js` is a small Express service that used to parse
+  uploaded PDF resumes. It is no longer used by the client (parsing is now
+  client-side with pdfjs-dist) and remains only for local dev.
 - **AI:** live mode calls Google Gemini directly from the browser with the
-  user-supplied key. No key is hardcoded anywhere in this repo.
+  user-supplied key. No key is hardcoded anywhere in this repo. A serverless
+  proxy holding the key is the planned bigger rebuild; until then, live mode
+  is client-side key by design.
 
 ## Security note
 

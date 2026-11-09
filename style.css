@@ -313,6 +313,51 @@ select, input[type="password"] { appearance: none; }
 .settings label { display: block; margin-top: 14px; }
 
 /* ---------- interview ---------- */
+.q-timer {
+  font-variant-numeric: tabular-nums;
+  font-size: 13.5px;
+  font-weight: 800;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+.q-timer::before { content: "⏱ "; }
+.q-tag {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  background: #fff;
+  border: 1px solid var(--accent-line);
+  color: var(--accent-ink);
+  border-radius: 999px;
+  padding: 2px 8px;
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+.criteria-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.criteria-list li {
+  font-size: 12.5px;
+  font-weight: 650;
+  border-radius: 999px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--body);
+}
+.criteria-list li.pass { border-color: var(--green-line); background: var(--green-soft); color: var(--green); }
+.criteria-list li.fail { border-color: #f3d2d2; background: #fdf3f3; color: #9a3b3b; }
 .progress-row {
   display: flex;
   align-items: center;
@@ -447,6 +492,44 @@ select, input[type="password"] { appearance: none; }
   background: var(--accent);
   border-radius: 999px;
 }
+
+/* ---------- rubric breakdown ---------- */
+.rubric-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 13.5px;
+}
+.rubric-label { flex: 0 0 46%; color: var(--ink); font-weight: 650; line-height: 1.4; }
+.rubric-bar {
+  flex: 1;
+  height: 8px;
+  background: #eceae6;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.rubric-bar > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #7b6cff, #5b4fe0);
+  border-radius: 999px;
+}
+.rubric-num { flex-shrink: 0; font-weight: 800; color: var(--ink); font-size: 12.5px; }
+
+/* ---------- history ---------- */
+.history { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.history-list { list-style: none; margin: 0; padding: 0; }
+.history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+}
+.history-item:last-child { border-bottom: 0; }
 
 .footer { text-align: center; margin-top: 10px; color: var(--muted); }
 
