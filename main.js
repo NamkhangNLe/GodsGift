@@ -5,7 +5,10 @@ import { maybeShowApiKeyBanner } from './gemini-api-banner';
 import pdfParse from 'pdf-parse';
 import './style.css';
 
-let API_KEY = 'AIzaSyC-_7mZuoHuxGrWS4P750XVMHiuxUuPocU';
+// SECURITY: A Gemini API key was previously hardcoded on this line and leaked
+// in git history. Rotate it in Google Cloud Console / AI Studio.
+// Set VITE_GEMINI_API_KEY in a local .env file (gitignored). See .env.example.
+let API_KEY = import.meta.env.VITE_GEMINI_API_KEY || 'TODO';
 
 let form = document.querySelector('form');
 let promptInput = document.querySelector('input[name="prompt"]');
