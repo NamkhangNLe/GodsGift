@@ -3,24 +3,140 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Video Interviewing Platform</title>
-  <link rel="stylesheet" href="/style.css">
+  <title>GodsGift — AI Interviewer</title>
+  <meta name="description" content="Practice job interviews with an AI interviewer. Pick a track, answer one question at a time, get feedback and a scorecard." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  
+  <script type="module" crossorigin src="./assets/index-1f3d9c32.js"></script>
+  <link rel="stylesheet" href="./assets/index-b67dfc1e.css">
 </head>
 <body>
   <main>
-    <h1>Video Interviewing Platform</h1>
-    <form>
-      <div class="prompt-box">
-        <label>
-          Upload your resume:
-          <input name="resume" type="file" accept=".pdf">
-        </label>
-        <button type="submit">Generate Interview Questions</button>
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo-mark" aria-hidden="true">✦</div>
+        <div>
+          <h1>GodsGift</h1>
+          <p class="tagline">AI interviewer. One question at a time.</p>
+        </div>
       </div>
-    </form>
-    <video autoplay></video>
-    <p class="output">(Interview transcript will appear here)</p>
+      <div class="top-actions">
+        <span id="modeBadge" class="badge badge-demo">Demo mode</span>
+        <button type="button" id="settingsBtn" class="btn btn-ghost">Settings</button>
+      </div>
+    </header>
+
+    <div id="keyBanner" class="banner" hidden>
+      You are in <strong>demo mode</strong>: questions and feedback come from a built-in
+      bank, not live AI. Add a Gemini API key in Settings to switch to live AI interviews.
+      <button type="button" id="keyBannerBtn" class="btn btn-small">Add key</button>
+    </div>
+
+    <!-- ============ SETUP ============ -->
+    <section id="view-setup" class="view">
+      <h2>Set up your interview</h2>
+      <p class="muted">Pick a track and a length. Answer in writing, get feedback on each
+      answer, and finish with a scorecard.</p>
+      <ol class="steps">
+        <li><span>1</span> Pick a track</li>
+        <li><span>2</span> Answer out loud, in writing</li>
+        <li><span>3</span> Get your scorecard</li>
+      </ol>
+
+      <fieldset>
+        <legend>Track</legend>
+        <div id="trackList" class="track-grid"></div>
+      </fieldset>
+
+      <div class="form-row">
+        <label>
+          Questions
+          <select id="countSelect">
+            <option value="3">3 questions</option>
+            <option value="5" selected>5 questions</option>
+            <option value="8">8 questions</option>
+          </select>
+        </label>
+        <label>
+          Difficulty
+          <select id="difficultySelect">
+            <option value="intern">Intern / junior</option>
+            <option value="mid" selected>Mid-level</option>
+            <option value="senior">Senior</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="form-row">
+        <label class="file-label">
+          Resume (optional, PDF)
+          <input id="resumeInput" type="file" accept=".pdf" />
+        </label>
+        <p id="resumeStatus" class="muted small"></p>
+      </div>
+
+      <details id="settingsPanel" class="settings">
+        <summary>Settings: Gemini API key</summary>
+        <p class="muted small">
+          Your key is stored only in this browser (localStorage). It is never sent
+          anywhere except Google's Gemini API. Without a key, the app runs in demo mode.
+          Get a key at
+          <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer">Google AI Studio</a>.
+          You can also set <code>VITE_GEMINI_API_KEY</code> in a <code>.env</code> file.
+        </p>
+        <label>
+          Gemini API key
+          <input id="apiKeyInput" type="password" placeholder="AIza..." autocomplete="off" />
+        </label>
+        <div class="form-row">
+          <button type="button" id="saveKeyBtn" class="btn btn-primary">Save key</button>
+          <button type="button" id="clearKeyBtn" class="btn btn-ghost">Remove key</button>
+          <span id="keyStatus" class="muted small"></span>
+        </div>
+      </details>
+
+      <button type="button" id="startBtn" class="btn btn-primary btn-large">Start interview</button>
+    </section>
+
+    <!-- ============ INTERVIEW ============ -->
+    <section id="view-interview" class="view" hidden>
+      <div class="progress-row">
+        <span id="progressText">Question 1 of 5</span>
+        <div class="progress-bar"><div id="progressFill"></div></div>
+        <span id="interviewMode" class="badge badge-demo">Demo mode</span>
+      </div>
+
+      <div id="transcript" class="transcript" aria-live="polite"></div>
+
+      <div id="typing" class="typing" hidden>Interviewer is thinking&hellip;</div>
+
+      <form id="answerForm">
+        <label for="answerInput" class="sr-only">Your answer</label>
+        <textarea id="answerInput" rows="4" placeholder="Type your answer here. Be specific: what you did, how, and what happened."></textarea>
+        <div class="form-row">
+          <button type="submit" id="submitAnswerBtn" class="btn btn-primary">Submit answer</button>
+          <button type="button" id="endBtn" class="btn btn-ghost">End interview early</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- ============ SCORECARD ============ -->
+    <section id="view-scorecard" class="view" hidden>
+      <h2>Your scorecard</h2>
+      <div id="scorecard" class="scorecard"></div>
+      <div class="form-row">
+        <button type="button" id="downloadBtn" class="btn btn-primary">Download transcript (.md)</button>
+        <button type="button" id="restartBtn" class="btn btn-ghost">Start a new interview</button>
+      </div>
+    </section>
+
+    <footer class="footer muted small">
+      GodsGift runs the interview in your browser. In live mode your answers go to
+      Google's Gemini API. In demo mode nothing leaves this page.
+    </footer>
   </main>
-  <script type="module" src="/main.js"></script>
+  
 </body>
 </html>
