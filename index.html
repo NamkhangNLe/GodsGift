@@ -3,24 +3,126 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Video Interviewing Platform</title>
+  <title>GodsGift — AI Interview Studio</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <main>
-    <h1>Video Interviewing Platform</h1>
-    <form>
-      <div class="prompt-box">
-        <label>
-          Upload your resume:
-          <input name="resume" type="file" accept=".pdf">
-        </label>
-        <button type="submit">Generate Interview Questions</button>
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <div class="wordmark">
+      <span class="wordmark-name">GodsGift</span>
+      <span class="wordmark-sub">AI interview studio</span>
+    </div>
+    <div class="session-meta" aria-hidden="true">
+      <span class="meta-tag warn" id="mockTag" hidden>MOCK MODE</span>
+      <span class="meta-tag" id="modelTag">CONNECTING…</span>
+      <span class="meta-tag dim" id="sessionTag">SESSION&nbsp;—</span>
+    </div>
+  </header>
+
+  <main class="stage">
+    <!-- Left column: intake -->
+    <section class="panel intake" aria-labelledby="intakeTitle">
+      <div class="panel-head">
+        <span class="step-index">01</span>
+        <h2 id="intakeTitle">Intake</h2>
       </div>
-    </form>
-    <video autoplay></video>
-    <p class="output">(Interview transcript will appear here)</p>
+      <p class="panel-copy">
+        Drop in a resume (PDF). GodsGift reads it on the local server,
+        then drafts interview questions from the skills it actually finds.
+      </p>
+
+      <form id="interviewForm">
+        <label class="dropzone" id="dropzone" for="resumeInput">
+          <input id="resumeInput" name="resume" type="file" accept=".pdf,application/pdf" />
+          <svg class="dropzone-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6 2h9l4 4v16H6V2z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M15 2v4h4" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M9.5 12.5l2.5-2.5 2.5 2.5M12 10.5V17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="dropzone-text" id="dropzoneText">Choose or drop a PDF resume</span>
+          <span class="dropzone-hint">Processed on your local server — the file is never stored.</span>
+        </label>
+
+        <button class="cta" type="submit" id="submitBtn">
+          <span class="cta-label">Generate interview questions</span>
+          <span class="cta-arrow" aria-hidden="true">&rarr;</span>
+        </button>
+      </form>
+
+      <ol class="steps" id="steps">
+        <li class="step" data-step="parse">
+          <span class="step-num">02</span>
+          <span class="step-body">
+            <span class="step-name">Parse resume</span>
+            <span class="step-note" id="noteParse">Waiting for a file</span>
+          </span>
+        </li>
+        <li class="step" data-step="generate">
+          <span class="step-num">03</span>
+          <span class="step-body">
+            <span class="step-name">Generate questions</span>
+            <span class="step-note" id="noteGenerate">Checking the local server…</span>
+          </span>
+        </li>
+        <li class="step" data-step="camera">
+          <span class="step-num">04</span>
+          <span class="step-body">
+            <span class="step-name">Go on camera</span>
+            <span class="step-note" id="noteCamera">Only when you press Start camera</span>
+          </span>
+        </li>
+      </ol>
+
+      <p class="status-line" id="statusLine" role="status" aria-live="polite"></p>
+    </section>
+
+    <!-- Right column: viewfinder + transcript -->
+    <section class="panel booth" aria-labelledby="boothTitle">
+      <div class="panel-head">
+        <span class="step-index" id="boothBadge">STANDBY</span>
+        <h2 id="boothTitle">Booth</h2>
+        <span class="rec" id="recIndicator" hidden><span class="rec-dot"></span>PREVIEW</span>
+      </div>
+
+      <div class="viewfinder" id="viewfinder">
+        <span class="corner tl" aria-hidden="true"></span>
+        <span class="corner tr" aria-hidden="true"></span>
+        <span class="corner bl" aria-hidden="true"></span>
+        <span class="corner br" aria-hidden="true"></span>
+        <video id="cameraFeed" autoplay muted playsinline></video>
+        <div class="viewfinder-idle" id="viewfinderIdle">
+          <span class="idle-glyph" aria-hidden="true"></span>
+          <p>Camera is off.<br/>It only starts if you press Start camera.</p>
+        </div>
+      </div>
+
+      <button class="camera-btn" id="cameraBtn" type="button" hidden>
+        <span class="camera-btn-dot" aria-hidden="true"></span>
+        Start camera
+      </button>
+      <button class="camera-btn stop" id="stopCameraBtn" type="button" hidden>
+        <span class="stop-square" aria-hidden="true"></span>
+        Stop camera
+      </button>
+
+      <div class="transcript-wrap">
+        <div class="transcript-head">
+          <h3>Question feed</h3>
+          <span class="transcript-state" id="transcriptState">idle</span>
+        </div>
+        <div class="output transcript" id="output">
+          <p class="placeholder">Your generated interview questions will stream in here, based on the skills found in the resume.</p>
+        </div>
+      </div>
+    </section>
   </main>
+
+  <footer class="site-footer">
+    <span>GodsGift — a local Gemini demo. The API key stays on the local server; in live mode only extracted skill keywords leave this machine for Google's Gemini API, and mock mode sends nothing. Review their terms before using real documents.</span>
+  </footer>
+
   <script type="module" src="/main.js"></script>
 </body>
 </html>
