@@ -2,7 +2,7 @@
   "name": "server",
   "version": "1.0.0",
   "description": "GodsGift local server: resume parsing + server-side Gemini question generation",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "test": "node --test"
