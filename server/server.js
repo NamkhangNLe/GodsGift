@@ -1,11 +1,59 @@
-const express = require('express');
-const fileUpload = require('express-fileupload');
-const pdfParse = require('pdf-parse');
+// GodsGift local server: parses resume PDFs and generates interview questions.
+// The Gemini API key lives HERE only (server/.env) — it is never shipped to
+// the browser. See SECURITY.md and server/.env.example.
+import 'dotenv/config';
+import express from 'express';
+import fileUpload from 'express-fileupload';
+import { extractPdfText } from './pdf-text.mjs';
+import { GoogleGenAI } from '@google/genai';
 
-// npm install express express-fileupload pdf-parse
+const API_KEY = process.env.GEMINI_API_KEY || '';
+// Current stable model per https://aistudio.google.com/docs/models (checked
+// 2026-11-13: gemini-2.5-flash is deprecated; 3.5 Flash-Lite is recommended
+// for new projects). Override with GEMINI_MODEL if Google moves on.
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+// MOCK_GEMINI=1 streams canned questions so the UI can be tried without a
+// key. Clearly flagged to the frontend via /health. Never set in real use.
+const MOCK = process.env.MOCK_GEMINI === '1';
+
+const ai = API_KEY ? new GoogleGenAI({ apiKey: API_KEY }) : null;
+
 const app = express();
 
-app.use(fileUpload());
+// Only the documented local Vite dev/preview origins can read or call this API.
+// Origin-less requests remain available to local command-line tests.
+const LOCAL_ORIGINS = new Set([
+  'http://localhost:5173', 'http://127.0.0.1:5173',
+  'http://localhost:4173', 'http://127.0.0.1:4173',
+]);
+app.use((req, res, next) => {
+  const origin = req.get('Origin');
+  if (origin && !LOCAL_ORIGINS.has(origin)) {
+    return res.status(403).send('This demo only accepts the documented localhost frontend origins.');
+  }
+  if (origin) res.set('Access-Control-Allow-Origin', origin);
+  res.vary('Origin');
+  res.set('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
+// Parse uploads in memory only. Check origin before consuming any upload.
+app.use(fileUpload({
+  limits: { fileSize: 10 * 1024 * 1024 },
+  abortOnLimit: true,
+}));
+app.use(express.json({ limit: '64kb' }));
+
+app.get('/health', (req, res) => {
+  res.json({
+    ok: true,
+    geminiConfigured: Boolean(API_KEY) || MOCK,
+    mock: MOCK,
+    model: MOCK ? 'mock' : MODEL,
+  });
+});
 
 app.post('/parse-pdf', async (req, res) => {
   if (!req.files || Object.keys(req.files).length === 0) {
@@ -13,18 +61,85 @@ app.post('/parse-pdf', async (req, res) => {
   }
 
   // The name of the input field (i.e. "resume") is used to retrieve the uploaded file
-  let resumeFile = req.files.resume;
+  const resumeFile = req.files.resume;
 
-  // Use the mv() method to place the file somewhere on your server
-  resumeFile.mv('/somewhere/on/your/server', async function(err) {
-    if (err)
-      return res.status(500).send(err);
+  if (!resumeFile || Array.isArray(resumeFile)) {
+    return res.status(400).send('Upload one PDF in the resume field.');
+  }
 
-    const data = await pdfParse(resumeFile.data);
-    res.send(data.text);
-  });
+  if (resumeFile.mimetype !== 'application/pdf' && !resumeFile.name.toLowerCase().endsWith('.pdf')) {
+    return res.status(400).send('Only PDF resumes are supported.');
+  }
+
+  try {
+    // Parse straight from the in-memory buffer; nothing is saved on the server.
+    const text = await extractPdfText(resumeFile.data);
+    res.type('text/plain').send(text);
+  } catch {
+    res.status(422).send('Could not parse that PDF. Try an unencrypted PDF with selectable text.');
+  }
 });
 
-app.listen(3000, () => {
-  console.log('Server started on port 3000');
+app.post('/generate-questions', async (req, res) => {
+  const skills = req.body?.skills;
+  if (!Array.isArray(skills) || skills.length === 0 ||
+      !skills.every((s) => typeof s === 'string' && s.length > 0 && s.length <= 40)) {
+    return res.status(400).send('Body must be JSON: { "skills": ["javascript", ...] }');
+  }
+
+  res.type('text/plain');
+
+  if (MOCK) {
+    // Stream the canned questions in chunks so the UI exercises its real
+    // streaming path without touching the Gemini API.
+    const mockQuestions = skills.map((skill, index) =>
+      `${index + 1}. **${skill.replace(/[\\`*_{}[\]()<>#]/g, '')}** - Describe a project where you used this skill. What tradeoff did you make, and how did you test it?`
+    ).concat('', '_Generated with MOCK_GEMINI=1 - canned template using submitted skills, not a real model._');
+    for (const chunk of mockQuestions) {
+      res.write(chunk + '\n');
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    return res.end();
+  }
+
+  if (!ai) {
+    return res.status(503).send(
+      'Gemini is not configured on this server. Add GEMINI_API_KEY to server/.env ' +
+      '(see server/.env.example) and restart.'
+    );
+  }
+
+  const prompt =
+    'You are preparing a technical interview. A resume mentions these skills: ' +
+    skills.join(', ') + '. Write one thoughtful, open-ended interview question ' +
+    'per skill, formatted as a markdown numbered list with the skill name in bold. ' +
+    'Do not invent experience the resume does not show.';
+
+  try {
+    const stream = await ai.models.generateContentStream({
+      model: MODEL,
+      contents: prompt,
+      config: {
+        safetySettings: [
+          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
+        ],
+      },
+    });
+    for await (const chunk of stream) {
+      const text = chunk.text;
+      if (text) res.write(text);
+    }
+    res.end();
+  } catch (err) {
+    // If we have not started streaming yet we can still send a real status.
+    if (!res.headersSent) {
+      res.status(502).send('Gemini request failed: ' + (err?.message || err));
+    } else {
+      res.end();
+    }
+  }
+});
+
+app.listen(3000, '127.0.0.1', () => {
+  console.log(`Server started on port 3000 (model: ${MOCK ? 'mock' : MODEL}, key: ${API_KEY ? 'set' : 'missing'})`);
 });
