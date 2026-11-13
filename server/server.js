@@ -75,18 +75,10 @@ app.post('/parse-pdf', async (req, res) => {
     // Parse straight from the in-memory buffer; nothing is saved on the server.
     const text = await extractPdfText(resumeFile.data);
     res.type('text/plain').send(text);
-  } catch (err) {
-    res.status(422).send('Could not parse that PDF: ' + err.message);
+  } catch {
+    res.status(422).send('Could not parse that PDF. Try an unencrypted PDF with selectable text.');
   }
 });
-
-const MOCK_QUESTIONS = [
-  '1. **JavaScript** — Walk me through a bug you tracked down in production JavaScript. How did you isolate it?',
-  '2. **Python** — Tell me about a Python project where performance mattered. What did you measure and change?',
-  '3. **Ruby** — Describe a time you inherited Ruby code you disagreed with. What did you keep, and why?',
-  '',
-  '_Generated with MOCK_GEMINI=1 — canned questions for UI testing, not from a real model._',
-].join('\n');
 
 app.post('/generate-questions', async (req, res) => {
   const skills = req.body?.skills;
@@ -100,7 +92,10 @@ app.post('/generate-questions', async (req, res) => {
   if (MOCK) {
     // Stream the canned questions in chunks so the UI exercises its real
     // streaming path without touching the Gemini API.
-    for (const chunk of MOCK_QUESTIONS.split('\n')) {
+    const mockQuestions = skills.map((skill, index) =>
+      `${index + 1}. **${skill.replace(/[\\`*_{}[\]()<>#]/g, '')}** - Describe a project where you used this skill. What tradeoff did you make, and how did you test it?`
+    ).concat('', '_Generated with MOCK_GEMINI=1 - canned template using submitted skills, not a real model._');
+    for (const chunk of mockQuestions) {
       res.write(chunk + '\n');
       await new Promise((r) => setTimeout(r, 150));
     }
