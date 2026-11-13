@@ -4,9 +4,7 @@
 import 'dotenv/config';
 import express from 'express';
 import fileUpload from 'express-fileupload';
-// Import the lib directly: pdf-parse's index.js enters a debug mode under
-// ESM and tries to read a test fixture from disk.
-import pdfParse from 'pdf-parse/lib/pdf-parse.js';
+import { extractPdfText } from './pdf-text.mjs';
 import { GoogleGenAI } from '@google/genai';
 
 const API_KEY = process.env.GEMINI_API_KEY || '';
@@ -75,8 +73,8 @@ app.post('/parse-pdf', async (req, res) => {
 
   try {
     // Parse straight from the in-memory buffer; nothing is saved on the server.
-    const data = await pdfParse(resumeFile.data);
-    res.type('text/plain').send(data.text);
+    const text = await extractPdfText(resumeFile.data);
+    res.type('text/plain').send(text);
   } catch (err) {
     res.status(422).send('Could not parse that PDF: ' + err.message);
   }
